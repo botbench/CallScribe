@@ -1,0 +1,19 @@
+# Secrets — never commit
+.hf_token
+.env
+.env.*
+!.env.example
+
+# Python / uv
+.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Local spike / model caches (optional large artifacts)
+spikes/out/
+spikes-env/
