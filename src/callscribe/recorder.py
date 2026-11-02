@@ -17,6 +17,7 @@ from callscribe import __version__
 from callscribe.audio_util import is_silent_wav, wav_info
 from callscribe.config import Config, load_config
 from callscribe.devices import resolve_mic_device
+from callscribe.logging_util import log_exception, log_line
 from callscribe.mixdown import MixdownError, mixdown
 from callscribe.notify import notify
 from callscribe.session import load_meta, save_meta
@@ -223,6 +224,7 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
                 f"(WezTerm often cannot show the prompt — use Terminal.app.)"
             )
             save_meta(session_dir, meta)
+            log_line("recorder", meta.error, level="ERROR")
             notify("CallScribe", meta.error, enabled=cfg.notify)
             return 1
 
@@ -234,6 +236,7 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
                 f"the device with `callscribe devices` (AirPods / built-in)."
             )
             save_meta(session_dir, meta)
+            log_line("recorder", meta.error, level="ERROR")
             notify("CallScribe", meta.error, enabled=cfg.notify)
             return 1
 
@@ -243,6 +246,7 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
             meta.status = "failed"
             meta.error = str(e)
             save_meta(session_dir, meta)
+            log_exception("recorder", "mixdown failed", e)
             notify("CallScribe", f"Mixdown failed: {e}", enabled=cfg.notify)
             return 1
 
@@ -256,6 +260,10 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
         meta.status = "recorded"
         meta.error = None
         save_meta(session_dir, meta)
+        log_line(
+            "recorder",
+            f"recorded {session_dir.name} duration_s={meta.duration_s}",
+        )
         notify(
             "CallScribe",
             f"Recording saved ({meta.duration_s:.0f}s): {session_dir.name}",
@@ -282,6 +290,7 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
         meta.error = str(e)
         meta.stopped_utc = datetime.now(UTC).isoformat()
         save_meta(session_dir, meta)
+        log_exception("recorder", f"failed {session_dir.name}", e)
         notify("CallScribe", f"Recording failed: {e}", enabled=cfg.notify)
         return 1
     finally:

@@ -23,6 +23,7 @@ from callscribe.asr import (
 from callscribe.audio_util import wav_info
 from callscribe.config import Config, load_config
 from callscribe.diarize import diarize_wav
+from callscribe.logging_util import log_exception, log_line
 from callscribe.mixdown import MixdownError, mixdown
 from callscribe.notify import notify
 from callscribe.render import render_markdown
@@ -132,6 +133,7 @@ def run_pipeline(
     meta.error = None
     save_meta(session_dir, meta)
     timings: dict[str, Any] = {}
+    log_line("pipeline", f"start {session_dir}")
 
     try:
         t0 = time.monotonic()
@@ -263,6 +265,11 @@ def run_pipeline(
         }
         meta.error = None
         save_meta(session_dir, meta)
+        log_line(
+            "pipeline",
+            f"done {session_dir.name} turns={len(turns)} "
+            f"diarize_s={timings.get('diarize_s')} me_asr_s={timings.get('me_asr_s')}",
+        )
         notify(
             "CallScribe",
             f"Transcript ready: {session_dir.name} ({len(turns)} turns)",
@@ -274,12 +281,14 @@ def run_pipeline(
         meta.status = "failed"
         meta.error = f"Mixdown before ASR failed: {e}"
         save_meta(session_dir, meta)
+        log_exception("pipeline", meta.error, e)
         notify("CallScribe", meta.error, enabled=cfg.notify)
         return 1
     except Exception as e:
         meta.status = "failed"
         meta.error = str(e)
         save_meta(session_dir, meta)
+        log_exception("pipeline", f"failed {session_dir.name}", e)
         notify("CallScribe", f"Transcription failed: {e}", enabled=cfg.notify)
         return 1
     finally:

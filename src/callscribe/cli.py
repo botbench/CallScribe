@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import subprocess
 from pathlib import Path
 
 import typer
 
 from callscribe import __version__
-from callscribe.config import load_config, write_defaults
+from callscribe.config import load_config
 from callscribe.devices import list_microphones, resolve_mic_device
 from callscribe.doctor import run_doctor
+from callscribe.logging_util import log_line
 from callscribe.paths import ensure_home, ensure_output_dir, expand, new_session_dir
 from callscribe.recorder import run_recorder, spawn_detached_recorder
 from callscribe.session import load_meta, new_meta, save_meta
@@ -43,53 +41,14 @@ def _ok(msg: str) -> None:
 
 @app.command("setup")
 def setup_cmd() -> None:
-    """Create config dirs; check ffmpeg; warm Whisper weights if possible."""
-    ensure_home()
-    cfg_path = write_defaults()
-    cfg = load_config()
-    out = ensure_output_dir(cfg.output_dir_path())
-    _ok(f"Wrote defaults if missing: {cfg_path}")
-    _ok(f"Session folder: {out}")
-    if not shutil.which("ffmpeg"):
-        _err("ffmpeg not found. Install with: brew install ffmpeg")
-        raise typer.Exit(1)
-    _ok(f"ffmpeg: {shutil.which('ffmpeg')}")
-    try:
-        import mlx_whisper
-    except ImportError:
-        _err("mlx-whisper not installed. Run: uv sync")
-        raise typer.Exit(1) from None
-    _ok("mlx-whisper: import OK")
-    # Allow network during setup only — warm the configured Whisper weights.
-    for key in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
-        os.environ.pop(key, None)
-    import tempfile
-    from pathlib import Path as _P
+    """Create config; check ffmpeg + HF token; warm Whisper and pyannote."""
+    from callscribe.setup_cmd import SetupError, run_setup
 
-    with tempfile.TemporaryDirectory() as tmp:
-        silent = _P(tmp) / "silent.wav"
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                "anullsrc=r=16000:cl=mono",
-                "-t",
-                "1",
-                str(silent),
-            ],
-            check=True,
-            capture_output=True,
-        )
-        _ok(f"Downloading/warming Whisper: {cfg.whisper_model}")
-        mlx_whisper.transcribe(
-            str(silent),
-            path_or_hf_repo=cfg.whisper_model,
-            word_timestamps=False,
-        )
-    _ok("Setup OK for Phase 2 (ASR). pyannote download arrives in Phase 3–4.")
+    try:
+        run_setup(echo=_ok)
+    except SetupError as e:
+        _err(str(e))
+        raise typer.Exit(1) from e
 
 
 @app.command("doctor")
@@ -151,6 +110,7 @@ def start_cmd(
 
     pid = spawn_detached_recorder(session_dir)
     write_recorder_state(RecorderState(pid=pid, session_dir=str(session_dir)))
+    log_line("cli", f"start pid={pid} session={session_dir}")
     _ok(f"Recording started (pid {pid})")
     _ok(str(session_dir))
 
@@ -330,7 +290,7 @@ def rename_cmd(
 
 @app.command("list")
 def list_cmd() -> None:
-    """List sessions under output_dir (Phase 4 polish; basic listing now)."""
+    """List sessions under output_dir with transcript status."""
     cfg = load_config()
     root = ensure_output_dir(cfg.output_dir_path())
     sessions = sorted(
@@ -343,8 +303,30 @@ def list_cmd() -> None:
     for s in sessions:
         try:
             meta = load_meta(s)
-            dur = f"{meta.duration_s:.0f}s" if meta.duration_s else "?"
-            _ok(f"{s.name}  status={meta.status}  duration={dur}")
+            dur = f"{meta.duration_s:.0f}s" if meta.duration_s is not None else "—"
+            has_md = (s / "transcript.md").exists()
+            has_json = (s / "transcript.json").exists()
+            if has_md and has_json:
+                tx = "transcript"
+            elif has_json:
+                tx = "json-only"
+            else:
+                tx = "no-transcript"
+            renamed = ""
+            speakers_path = s / "speakers.json"
+            if speakers_path.exists():
+                try:
+                    mapping = json.loads(speakers_path.read_text(encoding="utf-8"))
+                    if mapping:
+                        renamed = f"  renamed={len(mapping)}"
+                except (OSError, json.JSONDecodeError):
+                    renamed = "  renamed=?"
+            err = f"  error={meta.error}" if meta.error else ""
+            title = f"  title={meta.title!r}" if meta.title else ""
+            _ok(
+                f"{s.name}  status={meta.status}  duration={dur}  "
+                f"{tx}{renamed}{title}{err}"
+            )
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             _ok(f"{s.name}  (unreadable meta)")
 
