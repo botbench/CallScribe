@@ -2,7 +2,7 @@
 
 Personal macOS tool: record a call (system/app audio + microphone) to one stereo WAV, then (later phases) make a local speaker-labeled transcript.
 
-**Phase 1 (current):** recording CLI — `start` / `stop` / mixdown / `doctor` / `devices`.
+**Phase 3 (current):** recording + Whisper + pyannote diarization (`Me` / `SPEAKER_XX`, then `rename`).
 
 See [`callscribe-plan.md`](callscribe-plan.md), [`callscribe-plan-clarifications.md`](callscribe-plan-clarifications.md), and [`SPIKES.md`](SPIKES.md).
 
@@ -32,18 +32,25 @@ capture    = "system"             # or "app:Firefox"
 output_dir = "~/CallScribe"
 ```
 
-## Commands (Phase 1)
+## Commands
 
 ```bash
+uv run callscribe setup
 uv run callscribe devices
 uv run callscribe doctor          # 3s system + mic probe
 uv run callscribe start --title meet
 # … call …
-uv run callscribe stop
+uv run callscribe stop            # mixdown; auto-transcribe if enabled
 uv run callscribe status
 uv run callscribe list
-uv run callscribe transcribe ~/CallScribe/YYYY-MM-DD_HHMM   # mixdown recovery only
+uv run callscribe list
+uv run callscribe transcribe ~/CallScribe/2026-11-02_1317_my-call
+uv run callscribe transcribe ~/CallScribe/2026-11-02_1317_my-call --foreground --language en
+uv run callscribe rename ~/CallScribe/2026-11-02_1317_my-call SPEAKER_00=Alice SPEAKER_01=Bob
 ```
+
+`setup` / `start` / `list` / `doctor` create `output_dir` (default `~/CallScribe`) if it does not exist. Session folder names are stamped at record time — use `callscribe list` to find them.
+
 
 Stereo `call.wav`: **left = you (mic)**, **right = remote (system/app)**.
 

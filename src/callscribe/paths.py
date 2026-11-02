@@ -42,6 +42,13 @@ def ensure_home() -> Path:
     return home
 
 
+def ensure_output_dir(output_dir: str | Path) -> Path:
+    """Create the session root (e.g. ~/CallScribe) if missing."""
+    root = expand(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 _TITLE_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
@@ -54,8 +61,7 @@ def slugify_title(title: str | None) -> str | None:
 
 def new_session_dir(output_dir: str | Path, title: str | None = None) -> Path:
     """Create ~/CallScribe/YYYY-MM-DD_HHMM[_title]/ (local time)."""
-    root = expand(output_dir)
-    root.mkdir(parents=True, exist_ok=True)
+    root = ensure_output_dir(output_dir)
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
     slug = slugify_title(title)
     name = f"{stamp}_{slug}" if slug else stamp

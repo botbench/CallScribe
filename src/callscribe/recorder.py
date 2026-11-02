@@ -253,18 +253,28 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
             me_path.unlink(missing_ok=True)
             remote_path.unlink(missing_ok=True)
 
-        # Phase 1: recording only. Full ASR pipeline arrives in Phase 2+.
         meta.status = "recorded"
         meta.error = None
-        if cfg.auto_transcribe:
-            # Leave a breadcrumb; do not spawn models yet.
-            meta.tool_versions["auto_transcribe"] = "deferred-until-phase-2"
         save_meta(session_dir, meta)
         notify(
             "CallScribe",
             f"Recording saved ({meta.duration_s:.0f}s): {session_dir.name}",
             enabled=cfg.notify,
         )
+
+        if cfg.auto_transcribe:
+            try:
+                from callscribe.spawn_transcribe import spawn_detached_transcribe
+
+                tpid = spawn_detached_transcribe(session_dir)
+                notify(
+                    "CallScribe",
+                    f"Transcribing in background (pid {tpid})",
+                    enabled=cfg.notify,
+                )
+            except RuntimeError as e:
+                # e.g. another transcription already running
+                notify("CallScribe", str(e), enabled=cfg.notify)
         return 0
 
     except Exception as e:

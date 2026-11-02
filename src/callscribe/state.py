@@ -68,13 +68,25 @@ def signal_recorder_stop(state: RecorderState) -> None:
     os.kill(state.pid, signal.SIGTERM)
 
 
-# --- transcribe concurrency (Phase 1 stub state) ---
+# --- transcribe concurrency ---
 
 
 @dataclass
 class TranscribeState:
     pid: int
     session_dir: str
+
+
+def write_transcribe_state(state: TranscribeState, path: Path | None = None) -> None:
+    path = path or transcribe_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(asdict(state), indent=2) + "\n", encoding="utf-8")
+
+
+def clear_transcribe_state(path: Path | None = None) -> None:
+    path = path or transcribe_state_path()
+    if path.exists():
+        path.unlink()
 
 
 def get_live_transcribe() -> TranscribeState | None:
