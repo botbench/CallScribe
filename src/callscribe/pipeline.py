@@ -28,6 +28,7 @@ from callscribe.asr import (
     transcribe_wav,
 )
 from callscribe.audio_util import wav_info
+from callscribe.confidence import format_confidence_notify, summarize_confidence
 from callscribe.config import Config, load_config
 from callscribe.diarize import diarize_wav
 from callscribe.logging_util import log_exception, log_line
@@ -245,6 +246,8 @@ def run_pipeline(
         if speaker_map_path.exists():
             speaker_map = json.loads(speaker_map_path.read_text(encoding="utf-8"))
 
+        confidence = summarize_confidence(turns)
+
         transcript: dict[str, Any] = {
             "version": 1,
             "duration_s": duration,
@@ -252,6 +255,7 @@ def run_pipeline(
             "speakers": speakers,
             "turns": turns,
             "timings": timings,
+            "confidence": confidence,
             "phase": 3,  # pipeline feature level (diarization), not git phase
         }
 
@@ -280,11 +284,13 @@ def run_pipeline(
         log_line(
             "pipeline",
             f"done {session_dir.name} turns={len(turns)} "
+            f"asr_confidence={confidence.get('level')} "
             f"diarize_s={timings.get('diarize_s')} me_asr_s={timings.get('me_asr_s')}",
         )
+        conf_bit = format_confidence_notify(confidence)
         notify(
             "CallScribe",
-            f"Transcript ready: {session_dir.name} ({len(turns)} turns)",
+            f"Transcript ready: {session_dir.name} ({len(turns)} turns){conf_bit}",
             enabled=cfg.notify,
         )
         return 0

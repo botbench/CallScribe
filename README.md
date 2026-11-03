@@ -94,6 +94,8 @@ Session folders are stamped at record time (`YYYY-MM-DD_HHMM[_title]`). Use `lis
 
 `rename` updates `speakers.json` and re-renders `transcript.md` without re-running ASR. JSON keeps original `SPEAKER_XX` labels.
 
+Each transcript includes an **ASR confidence** sanity check (`high` / `medium` / `low`) from Whisper word probabilities — useful as a “maybe shaky” flag, not a calibrated accuracy % and not a speaker-label score. Shown in `transcript.md` and the completion notification.
+
 ## Typical workflow
 
 1. Put on headphones / AirPods (avoid laptop speakers → echo on the mic channel).
@@ -132,6 +134,10 @@ Inspect logs under `~/.callscribe/logs/` and `meta.json` / `recorder.log` inside
 ## Development
 
 ```bash
-uv run pytest
+uv run pytest                 # unit tests (skips @pytest.mark.slow)
+uv run pytest --slow          # + silence / say-voice / model pipeline smokes
+# or: RUN_SLOW=1 uv run pytest
 uv run ruff check src tests
 ```
+
+Slow tests need `ffmpeg`, macOS `say`, and a prior `callscribe setup` (Hub model cache). They are not a quality benchmark for synthetic TTS.

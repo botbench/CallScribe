@@ -22,6 +22,15 @@ def test_render_markdown_empty() -> None:
 def test_render_markdown_turns_and_remap() -> None:
     transcript = {
         "duration_s": 120.0,
+        "confidence": {
+            "level": "high",
+            "mean_word_p": 0.91,
+            "median_word_p": 0.9,
+            "low_p_ratio": 0.05,
+            "word_count": 10,
+            "warning": False,
+            "note": "test",
+        },
         "turns": [
             {
                 "speaker": "Me",
@@ -40,6 +49,7 @@ def test_render_markdown_turns_and_remap() -> None:
         ],
     }
     md = render_markdown(transcript, title="Standup", created_local="2026-10-27T09:00:00")
+    assert "ASR confidence: high" in md
     assert "**Me** [00:00:03]: Hello" in md
     assert "**Remote** [00:00:08]: Hi there" in md
 

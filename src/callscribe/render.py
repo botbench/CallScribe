@@ -62,11 +62,17 @@ def render_markdown(
     # Prefer "YYYY-MM-DD HH:MM" from ISO-ish local string
     if created_local and "T" in created_local:
         when = created_local.replace("T", " ")[:16]
+    from callscribe.confidence import format_confidence_line
+
     head_title = title or "Call"
     lines = [
         f"# {head_title} — {when} ({format_duration_human(duration)})",
         "",
     ]
+    conf_line = format_confidence_line(data.get("confidence"))
+    if conf_line:
+        lines.append(f"_{conf_line}_")
+        lines.append("")
     turns = data.get("turns") or []
     if not turns:
         lines.append("_No speech detected._")
