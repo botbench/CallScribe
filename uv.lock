@@ -255,12 +255,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "catap", specifier = ">=0.6.0" },
-    { name = "mlx-whisper", specifier = ">=0.4.3" },
-    { name = "pyannote-audio", specifier = ">=4.0.7" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
-    { name = "typer", specifier = ">=0.19.0" },
+    { name = "catap", specifier = "==0.6.0" },
+    { name = "mlx-whisper", specifier = "==0.4.3" },
+    { name = "pyannote-audio", specifier = "==4.0.7" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = "==9.1.1" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.17.3" },
+    { name = "typer", specifier = "==0.27.3" },
 ]
 provides-extras = ["dev"]
 

@@ -5,12 +5,59 @@ from __future__ import annotations
 import re
 import subprocess
 from dataclasses import dataclass
+from typing import Literal
+
+MicClass = Literal["airpods", "bluetooth", "builtin", "usb", "unknown"]
 
 
 @dataclass(frozen=True)
 class MicDevice:
     index: int
     name: str
+
+
+def classify_mic(name: str) -> MicClass:
+    """Heuristic mic class from an avfoundation device name (for doctor tips)."""
+    n = name.lower()
+    if "airpods" in n:
+        return "airpods"
+    if any(k in n for k in ("bluetooth", "hands-free", "headset", "hfp", "sco")):
+        return "bluetooth"
+    if any(
+        k in n
+        for k in (
+            "macbook",
+            "imac",
+            "built-in",
+            "builtin",
+            "internal",
+            "microphone array",
+        )
+    ):
+        return "builtin"
+    if any(k in n for k in ("usb", "yeti", "snowball", "rode", "fifine", "hyperx")):
+        return "usb"
+    return "unknown"
+
+
+def mic_class_tip(mic_class: MicClass) -> str | None:
+    """Optional quality caveat for doctor output."""
+    if mic_class == "airpods":
+        return (
+            "AirPods / Bluetooth headset mic: supported, but HFP/SCO may drop to "
+            "~16–24 kHz and add sync skew vs wired. Prefer this over laptop speakers."
+        )
+    if mic_class == "bluetooth":
+        return (
+            "Bluetooth mic: supported without hard-block; quality and latency can be "
+            "worse than wired/USB. Prefer headphones so remote audio is not re-mic'd."
+        )
+    if mic_class == "builtin":
+        return (
+            "Built-in mic: fine for quiet rooms; use headphones/AirPods so system "
+            "audio does not leak into the Me channel."
+        )
+    return None
 
 
 _AUDIO_HEADER = re.compile(r"AVFoundation audio devices:", re.I)

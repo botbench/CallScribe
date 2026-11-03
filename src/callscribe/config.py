@@ -17,6 +17,7 @@ capture           = "system"       # "system" or "app:Firefox"
 exclude_apps      = []             # only used when capture = "system"
 language          = "auto"         # or "en", "fr", "nl", ...
 whisper_model     = "mlx-community/whisper-large-v3-turbo"
+# Optional local pyannote snapshot (config.yaml). Default: Hugging Face Hub cache.
 diarization_dir   = "~/.callscribe/models/pyannote-speaker-diarization-community-1"
 initial_prompt    = ""             # vocabulary hint for Whisper: names, acronyms
 keep_raw_tracks   = true

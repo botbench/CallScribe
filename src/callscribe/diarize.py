@@ -15,7 +15,8 @@ def _load_pipeline(diarization_dir: Path):
     from pyannote.audio import Pipeline
 
     token = load_hf_token()
-    # Prefer a local snapshot if setup copied one; else Hub id (uses HF cache).
+    # Canonical path: Hub id → HF cache (offline after setup).
+    # Optional override: local snapshot dir with config.yaml.
     source: str | Path
     if (diarization_dir / "config.yaml").exists():
         source = diarization_dir

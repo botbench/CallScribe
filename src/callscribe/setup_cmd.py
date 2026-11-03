@@ -113,17 +113,6 @@ def run_setup(*, echo) -> None:
                     f"https://huggingface.co/{COMMUNITY_MODEL} and ensure the token "
                     "can access gated repos."
                 )
-            # Touch local diarization_dir marker for clarity
-            dest = cfg.diarization_dir_path()
-            dest.mkdir(parents=True, exist_ok=True)
-            marker = dest / "README.txt"
-            if not marker.exists():
-                marker.write_text(
-                    f"Model weights are cached by Hugging Face Hub "
-                    f"({COMMUNITY_MODEL}).\n"
-                    "This directory is reserved for an optional local snapshot.\n",
-                    encoding="utf-8",
-                )
             del pipe
         except Exception as e:
             log_exception("setup", "pyannote download failed", e)
@@ -135,6 +124,32 @@ def run_setup(*, echo) -> None:
                     "and use a valid HF token with access to gated repos."
                 )
             fail(f"pyannote setup failed: {e}")
-        ok("pyannote: OK")
+        ok("pyannote: OK (Hub cache)")
 
+    hub_cache = _hub_cache_dir()
+    ok(f"Model cache (canonical offline store): {hub_cache}")
+    dest = cfg.diarization_dir_path()
+    dest.mkdir(parents=True, exist_ok=True)
+    marker = dest / "README.txt"
+    marker.write_text(
+        f"CallScribe loads pyannote from the Hugging Face Hub cache by default "
+        f"({COMMUNITY_MODEL}).\n"
+        f"Hub cache: {hub_cache}\n\n"
+        "Optional override: place a full local snapshot here (must include "
+        "config.yaml). Then set diarization_dir in config.toml to this path.\n",
+        encoding="utf-8",
+    )
+    ok(
+        f"Optional local diarization override dir: {dest} "
+        "(unused unless it contains config.yaml)"
+    )
     ok("Setup complete. Transcription can run offline after this.")
+
+
+def _hub_cache_dir() -> Path:
+    try:
+        from huggingface_hub.constants import HF_HUB_CACHE
+
+        return Path(HF_HUB_CACHE).expanduser()
+    except Exception:
+        return Path("~/.cache/huggingface/hub").expanduser()

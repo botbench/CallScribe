@@ -13,7 +13,12 @@ import catap
 from callscribe import __version__
 from callscribe.audio_util import wav_info
 from callscribe.config import load_config
-from callscribe.devices import list_microphones, resolve_mic_device
+from callscribe.devices import (
+    classify_mic,
+    list_microphones,
+    mic_class_tip,
+    resolve_mic_device,
+)
 from callscribe.paths import callscribe_home, config_path, ensure_output_dir
 from callscribe.recorder import host_app_hint
 
@@ -51,7 +56,11 @@ def run_doctor(*, seconds: float = 3.0) -> int:
 
     try:
         mic = resolve_mic_device(cfg.mic_device)
-        print(f"resolved mic: [{mic.index}] {mic.name}")
+        mic_class = classify_mic(mic.name)
+        print(f"resolved mic: [{mic.index}] {mic.name}  class={mic_class}")
+        tip = mic_class_tip(mic_class)
+        if tip:
+            print(f"  note: {tip}")
     except RuntimeError as e:
         print(f"ERROR: {e}")
         return 1

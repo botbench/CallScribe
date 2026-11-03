@@ -34,7 +34,7 @@ uv sync
 uv run callscribe setup
 ```
 
-`setup` creates `~/.callscribe/`, writes default config, checks ffmpeg, warms the Whisper model, and downloads pyannote (network allowed here only). After that, transcription runs with Hub offline flags set.
+`setup` creates `~/.callscribe/`, writes default config, checks ffmpeg, and warms Whisper + pyannote into the **Hugging Face Hub cache** (network allowed here only). Transcription then runs with Hub offline flags. `diarization_dir` in config is an optional local snapshot override (only used if it contains `config.yaml`); otherwise Hub cache is canonical.
 
 Optional PATH install: `uv tool install -e .` from this repo.
 
@@ -107,9 +107,10 @@ Session folders are stamped at record time (`YYYY-MM-DD_HHMM[_title]`). Use `lis
 | Mic track silent | Grant Microphone; unmute; `devices` and set `mic_device` (AirPods name changes when connected) |
 | `setup` fails on HF / 403 / gated | Accept the pyannote model license; use a valid Read token in `HF_TOKEN` or `.hf_token` |
 | `ffmpeg not found` | `brew install ffmpeg` |
-| Transcription fails offline | Re-run `setup` on the network so models are cached |
+| Transcription fails offline | Re-run `setup` on the network so Hub cache has the models (`~/.cache/huggingface/hub`) |
 | Wrong language | `transcribe … --foreground --language en` (or set `language` in config) |
 | Session path errors | Use a real folder from `list`, not a `YYYY-MM-DD_HHMM` placeholder |
+| AirPods / Bluetooth sound thin | Expected on HFP/SCO; still supported — `doctor` prints the mic class tip |
 
 Inspect logs under `~/.callscribe/logs/` and `meta.json` / `recorder.log` inside the session folder.
 
