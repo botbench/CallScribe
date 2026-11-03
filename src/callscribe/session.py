@@ -1,4 +1,8 @@
-"""Session folder metadata (meta.json)."""
+"""Session folder metadata (``meta.json``).
+
+Lifecycle: ``recording`` → ``recorded`` → ``transcribing`` → ``done`` | ``failed``.
+Start timestamps for me/remote drive mixdown ``adelay`` alignment.
+"""
 
 from __future__ import annotations
 
@@ -43,6 +47,7 @@ class SessionMeta:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SessionMeta:
+        # Ignore unknown keys so older/newer meta.json stays loadable.
         known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
         filtered = {k: v for k, v in data.items() if k in known}
         return cls(**filtered)

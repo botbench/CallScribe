@@ -1,4 +1,11 @@
-"""Transcription pipeline (Phase 3: diarization + Me / SPEAKER_XX)."""
+"""Transcription pipeline: split stereo → diarize remote → ASR both → merge turns.
+
+Invariant: ``call.wav`` is stereo with **left = me (mic)** and **right = remote**.
+Remote speakers become ``SPEAKER_XX`` via exclusive pyannote diarization + word
+alignment; the mic channel is always labeled ``my_name`` (default ``Me``).
+
+Must run offline after ``setup`` (Hub offline env vars). Only ``setup`` downloads.
+"""
 
 from __future__ import annotations
 
@@ -32,6 +39,7 @@ from callscribe.state import clear_transcribe_state
 
 
 def _set_offline_env() -> None:
+    # Force cache-only Hub access so a flaky network cannot phone home mid-call.
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
@@ -92,6 +100,7 @@ def _language_arg(cfg: Config, override: str | None) -> str | None:
 
 
 def _ensure_call_wav(session_dir: Path, cfg: Config) -> Path:
+    """Use existing call.wav, or rebuild from raw tracks (crash / keep_raw recovery)."""
     call = session_dir / "call.wav"
     if call.exists():
         return call
@@ -153,7 +162,8 @@ def run_pipeline(
             detected_lang: str | None = None
             diar_turns: list[tuple[float, float, str]] = []
 
-            # --- Remote: diarize then ASR + align ---
+            # Remote first: diarization is exclusive on this channel only (no Me).
+            # Skip silent channels — Whisper often invents "Thank you" on digital silence.
             t_d = time.monotonic()
             if channel_is_silent(remote_16k):
                 remote_turns = []
@@ -179,6 +189,7 @@ def run_pipeline(
                     language=lang,
                     initial_prompt=cfg.initial_prompt,
                 )
+                # Drop ASR that falls outside any diarization turn (hallucination aid).
                 remote_segs = filter_segments(
                     remote_result.segments,
                     diar_turns=diar_turns if diar_turns else None,
@@ -193,7 +204,7 @@ def run_pipeline(
                 gc.collect()
                 timings["remote_asr_s"] = time.monotonic() - t1
 
-            # --- Mic ---
+            # Mic: one speaker label; reuse remote-detected language when language=auto.
             t2 = time.monotonic()
             if channel_is_silent(me_16k):
                 me_turns = []
@@ -218,6 +229,7 @@ def run_pipeline(
                 gc.collect()
                 timings["me_asr_s"] = time.monotonic() - t2
 
+        # Interleave Me + remote turns by start time; merge short same-speaker gaps.
         turns = merge_neighbor_turns(remote_turns + me_turns)
         duration = float(wav_info(call)["duration_s"])
 
@@ -227,7 +239,7 @@ def run_pipeline(
             if spk != my_name:
                 speakers[spk] = {"channel": "right"}
 
-        # Apply rename map for markdown only; JSON keeps originals
+        # speakers.json remaps labels in markdown only; JSON keeps SPEAKER_XX stable.
         speaker_map_path = session_dir / "speakers.json"
         speaker_map: dict[str, str] | None = None
         if speaker_map_path.exists():
@@ -240,7 +252,7 @@ def run_pipeline(
             "speakers": speakers,
             "turns": turns,
             "timings": timings,
-            "phase": 3,
+            "phase": 3,  # pipeline feature level (diarization), not git phase
         }
 
         (session_dir / "transcript.json").write_text(

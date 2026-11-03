@@ -1,4 +1,7 @@
-"""Append-only logs under ~/.callscribe/logs/."""
+"""Append-only logs under ``~/.callscribe/logs/``.
+
+Logging must never fail the main workflow (permission / disk errors are ignored).
+"""
 
 from __future__ import annotations
 

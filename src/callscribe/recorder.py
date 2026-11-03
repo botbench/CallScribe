@@ -1,4 +1,16 @@
-"""Background dual-track recorder (system/app tap + microphone)."""
+"""Background dual-track recorder (system/app tap + microphone).
+
+Runs as a detached process (``callscribe _recorder``). Captures in parallel:
+
+* **remote** — Core Audio process tap via ``catap`` (system or one app)
+* **me** — microphone via ``ffmpeg`` avfoundation
+
+On SIGTERM: finalize both WAVs, reject silent tracks (usually missing TCC
+permissions), mix down to stereo ``call.wav``, optionally spawn transcription.
+
+macOS permissions attach to the *host app* that launched ``start`` (Terminal,
+iTerm, …), not to the Python binary — see ``CALLSCRIBE_HOST_APP``.
+"""
 
 from __future__ import annotations
 
@@ -25,8 +37,12 @@ from callscribe.state import clear_recorder_state
 
 
 def host_app_hint() -> str:
-    """Best-effort name of the app that owns TCC permissions for this capture."""
-    # Prefer hint from the CLI that spawned the detached recorder.
+    """Best-effort name of the app that owns TCC permissions for this capture.
+
+    Used in user-facing error text ("grant Microphone to Terminal.app").
+    Prefers ``CALLSCRIBE_HOST_APP`` set by ``spawn_detached_recorder``; otherwise
+    walks the parent process (often wrong once detached under launchd).
+    """
     env_hint = os.environ.get("CALLSCRIBE_HOST_APP", "").strip()
     if env_hint:
         base = env_hint
@@ -53,6 +69,7 @@ def host_app_hint() -> str:
     return base
 
 
+# Process names to skip when walking parents from an interactive CLI.
 _SKIP_HOST_NAMES = {
     "python",
     "python3",
@@ -69,7 +86,10 @@ _SKIP_HOST_NAMES = {
 
 
 def detect_host_app_for_cli() -> str:
-    """Host app as seen from the interactive `callscribe start` process."""
+    """Walk parents of the interactive ``start`` process to find Terminal/iTerm/etc.
+
+    Result is passed into the detached recorder via ``CALLSCRIBE_HOST_APP``.
+    """
     try:
         pid = os.getpid()
         for _ in range(8):
@@ -86,7 +106,6 @@ def detect_host_app_for_cli() -> str:
             base = Path(comm).name
             if base.lower() not in _SKIP_HOST_NAMES and not base.startswith("-"):
                 return base
-            # Still useful: Terminal / iTerm / WezTerm even if weird naming
             low = base.lower()
             if any(x in low for x in ("terminal", "iterm", "wezterm", "cursor")):
                 return base
@@ -114,7 +133,8 @@ def _start_remote(cfg: Config, remote_path: Path):
 
 
 def _start_mic(mic_index: int, me_path: Path) -> subprocess.Popen[str]:
-    # avfoundation: "video:audio" — none for video, index for audio.
+    # avfoundation input is "video_index:audio_index"; empty video = mic only.
+    # stdin kept open so we can send "q" for a clean WAV header on stop.
     return subprocess.Popen(
         [
             "ffmpeg",
@@ -135,7 +155,7 @@ def _start_mic(mic_index: int, me_path: Path) -> subprocess.Popen[str]:
 
 
 def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
-    """Foreground recorder loop for `callscribe _recorder <session-dir>`."""
+    """Foreground recorder loop for ``callscribe _recorder <session-dir>``."""
     cfg = cfg or load_config()
     session_dir = session_dir.resolve()
     me_path = session_dir / "me.wav"
@@ -156,6 +176,7 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
     stop_requested = False
 
     def _on_signal(signum: int, frame: object) -> None:  # noqa: ARG001
+        # ``stop`` sends SIGTERM; do not exit immediately — finalize WAVs below.
         nonlocal stop_requested
         stop_requested = True
 
@@ -166,6 +187,7 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
     mic_proc: subprocess.Popen[str] | None = None
 
     try:
+        # Start both tracks as close together as possible; timestamps feed adelay.
         remote_session = _start_remote(cfg, remote_path)
         t_remote_mono = time.monotonic()
         remote_session.start()
@@ -187,14 +209,15 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
                 raise RuntimeError(
                     f"Microphone ffmpeg exited early (code {mic_proc.returncode}). {err}"
                 )
+            # Property (not a method) — True if the Core Audio tap failed mid-run.
             if remote_session.capture_failed:
                 raise RuntimeError("System/app audio capture failed (catap).")
             time.sleep(0.2)
 
-        # Graceful stop
         remote_session.stop()
         silence_remote = bool(remote_session.captured_only_silence)
 
+        # Prefer ffmpeg interactive quit over SIGKILL so the WAV header is rewritten.
         if mic_proc.poll() is None and mic_proc.stdin:
             try:
                 mic_proc.stdin.write("q")
@@ -310,7 +333,11 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
 
 
 def spawn_detached_recorder(session_dir: Path) -> int:
-    """Start `callscribe _recorder` as a detached process; return PID."""
+    """Start ``callscribe _recorder`` in a new session; return PID.
+
+    ``start_new_session=True`` detaches from the controlling terminal so the
+    interactive CLI can exit while recording continues.
+    """
     callscribe_bin = shutil.which("callscribe")
     if callscribe_bin:
         cmd = [callscribe_bin, "_recorder", str(session_dir)]
@@ -333,6 +360,6 @@ def spawn_detached_recorder(session_dir: Path) -> int:
         cwd=str(session_dir),
         env=env,
     )
-    # File handle kept open by child; parent can close its copy.
+    # Child inherits the open FD; closing the parent's copy is fine.
     log_f.close()
     return proc.pid

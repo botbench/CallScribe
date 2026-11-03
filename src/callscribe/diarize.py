@@ -1,4 +1,9 @@
-"""pyannote speaker diarization (MPS with CPU fallback)."""
+"""pyannote speaker diarization (MPS with CPU fallback).
+
+We use *exclusive* diarization (one speaker at a time) so word↔speaker alignment
+is a simple interval overlap. MPS is preferred when it works; community-1 can
+crash on Metal — fall back to CPU mid-run if inference fails.
+"""
 
 from __future__ import annotations
 
@@ -77,6 +82,7 @@ def diarize_wav(
     try:
         output = pipeline(str(path), **kwargs)
     except Exception:
+        # MPS often fails late (embedding / Metal shaders); retry once on CPU.
         if device == "mps":
             import torch
 
@@ -87,16 +93,14 @@ def diarize_wav(
             raise
 
     turns: list[tuple[float, float, str]] = []
-    # exclusive_speaker_diarization is an Annotation
+    # pyannote 4.x: exclusive_speaker_diarization is an Annotation (not 3.x API).
     for turn, _, speaker in output.exclusive_speaker_diarization.itertracks(yield_label=True):
         label = str(speaker)
-        # Normalize pyannote labels like SPEAKER_00 / speaker_0
         if not label.upper().startswith("SPEAKER"):
-            # map ordinal if needed
             label = f"SPEAKER_{label}" if label.isdigit() else label
         turns.append((float(turn.start), float(turn.end), label))
 
-    # Free memory
+    # Models are large; free before Whisper loads in the same process.
     del output
     del pipeline
     gc.collect()

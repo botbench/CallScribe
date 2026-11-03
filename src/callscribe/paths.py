@@ -1,4 +1,8 @@
-"""Filesystem locations for CallScribe state and sessions."""
+"""Filesystem locations for CallScribe state and sessions.
+
+* ``~/.callscribe/`` — config, PID state, logs, optional model override dir
+* ``~/CallScribe/`` (configurable) — one folder per recording session
+"""
 
 from __future__ import annotations
 

@@ -1,10 +1,15 @@
-"""Pure speaker ↔ word alignment (no I/O, no models)."""
+"""Pure speaker ↔ word alignment (no I/O, no models).
+
+Takes ASR words and exclusive diarization turns on the *remote* channel, assigns
+each word a ``SPEAKER_XX``, then packs consecutive same-speaker words into turns.
+Unit-tested; keep this module free of ffmpeg / torch / filesystem side effects.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
-# Plan defaults
+# Plan defaults: nearest-turn fallback window; split turn if gap exceeds this.
 NEAREST_TURN_S = 0.5
 GAP_SPLIT_S = 2.0
 

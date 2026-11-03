@@ -1,4 +1,8 @@
-"""Merge me.wav + remote.wav into stereo call.wav (L=me, R=remote)."""
+"""Merge me.wav + remote.wav into stereo call.wav (L=me, R=remote).
+
+Sync is best-effort: delay the track that started later using timestamps from
+``meta.json`` (monotonic preferred). Output is always 16 kHz 16-bit PCM stereo.
+"""
 
 from __future__ import annotations
 
@@ -44,16 +48,15 @@ def mixdown(
     remote_info = wav_info(remote_wav)
     me_delay_ms, remote_delay_ms = start_delay_seconds(meta)
 
-    # adelay wants milliseconds per channel; mono → one value.
+    # adelay takes ms per channel; for mono we duplicate the value (L|R syntax).
     me_adelay = max(0, int(round(me_delay_ms)))
     remote_adelay = max(0, int(round(remote_delay_ms)))
 
     with tempfile.TemporaryDirectory(prefix="callscribe-mix-") as tmp:
         tmp_path = Path(tmp)
         staged = tmp_path / "call.wav"
-        # Resample each to mono 16k, delay the later-started track, pad to equal
-        # length via apad+shortest on the join... better: use asplit duration.
-        # Filter: convert → adelay → then amerge with apad on both to longest.
+        # Resample → delay later track → pad → join stereo. -t uses the longer
+        # (duration + delay) so apad does not leave the join open-ended.
         filter_complex = (
             f"[0:a]aformat=sample_rates={sample_rate}:channel_layouts=mono,"
             f"adelay={me_adelay}|{me_adelay},apad[me];"
@@ -61,7 +64,6 @@ def mixdown(
             f"adelay={remote_adelay}|{remote_adelay},apad[remote];"
             f"[me][remote]join=inputs=2:channel_layout=stereo[out]"
         )
-        # Duration: use the longer of (raw + delay) so we don't truncate.
         longer = max(
             float(me_info["duration_s"]) + me_delay_ms / 1000.0,
             float(remote_info["duration_s"]) + remote_delay_ms / 1000.0,

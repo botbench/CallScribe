@@ -1,4 +1,8 @@
-"""Pure transcript rendering (no I/O)."""
+"""Pure transcript rendering (no I/O).
+
+``transcript.json`` keeps stable ``SPEAKER_XX`` labels; markdown may show names
+from ``speakers.json`` via ``speaker_map``.
+"""
 
 from __future__ import annotations
 

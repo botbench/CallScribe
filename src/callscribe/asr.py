@@ -1,4 +1,9 @@
-"""mlx-whisper wrapper and hallucination / silence filters."""
+"""mlx-whisper wrapper and hallucination / silence filters.
+
+Thresholds are intentionally hardcoded (plan clarifications): expose in config
+only if users need to tune. ``condition_on_previous_text=False`` reduces
+Whisper looping on call audio.
+"""
 
 from __future__ import annotations
 
@@ -8,14 +13,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# Hardcoded defaults (clarifications Q9: not in config.toml for v1).
+# Hallucination / silence gates (16-bit PCM RMS where noted).
 NO_SPEECH_PROB_MAX = 0.6
 AVG_LOGPROB_MIN = -1.0
 COMPRESSION_RATIO_MAX = 2.4
-MIC_RMS_MIN = 50.0  # 16-bit PCM; drop quieter mic segments
-CHANNEL_RMS_SILENCE = 20.0  # whole-file RMS; skip ASR on digital silence
+MIC_RMS_MIN = 50.0  # per-segment; drop quiet mic slices (noise floor / bleed)
+CHANNEL_RMS_SILENCE = 20.0  # whole-file; skip ASR entirely on near-digital silence
 MIN_SEGMENT_DURATION_S = 0.25
-# Common Whisper silence hallucinations (case-insensitive, stripped punctuation).
+# Phrases Whisper often invents on silence (matched after normalize).
 HALLUCINATION_PHRASES = frozenset(
     {
         "thank you",
@@ -130,6 +135,7 @@ def filter_segments(
     require_mic_energy: bool = False,
     diar_turns: list[tuple[float, float, str]] | None = None,
 ) -> list[Segment]:
+    """Drop likely hallucinations; optional mic RMS and diarization overlap gates."""
     from callscribe.align import segment_overlaps_diarization
 
     kept: list[Segment] = []
@@ -154,7 +160,7 @@ def transcribe_wav(
     language: str | None,
     initial_prompt: str = "",
 ) -> AsrResult:
-    """Run mlx-whisper with word timestamps."""
+    """Run mlx-whisper with word timestamps (needed for diarization alignment)."""
     import mlx_whisper
 
     kwargs: dict[str, Any] = {

@@ -1,4 +1,8 @@
-"""Load and validate ~/.callscribe/config.toml."""
+"""Load and validate ``~/.callscribe/config.toml``.
+
+Defaults live in ``DEFAULT_TOML`` (written on first run). Unknown keys are
+rejected so typos fail loudly. Hallucination thresholds stay in ``asr.py``.
+"""
 
 from __future__ import annotations
 

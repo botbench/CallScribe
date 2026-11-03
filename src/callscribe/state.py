@@ -1,4 +1,8 @@
-"""Recorder / transcribe state files under ~/.callscribe."""
+"""Recorder / transcribe PID state under ``~/.callscribe``.
+
+Small JSON files let ``status`` / ``stop`` / ``toggle`` find the live background
+process. Stale files (dead PID) are cleared automatically.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +23,7 @@ class RecorderState:
 
 
 def _pid_alive(pid: int) -> bool:
+    """True if ``pid`` exists (signal 0); PermissionError still means alive."""
     if pid <= 0:
         return False
     try:

@@ -1,4 +1,8 @@
-"""Environment and permission checks."""
+"""Environment and permission checks (``callscribe doctor``).
+
+Records a few seconds of system/app audio and mic; reports silence (usually
+missing TCC grants) and prints a mic-class quality tip for AirPods/Bluetooth.
+"""
 
 from __future__ import annotations
 

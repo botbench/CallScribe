@@ -1,4 +1,8 @@
-"""Spawn detached transcription jobs."""
+"""Spawn detached transcription jobs (``callscribe _transcribe``).
+
+Only one transcription at a time (``transcribe.state``). Logs go to
+``session/transcribe.log``.
+"""
 
 from __future__ import annotations
 

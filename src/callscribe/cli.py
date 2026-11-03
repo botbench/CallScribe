@@ -1,4 +1,8 @@
-"""CallScribe Typer CLI."""
+"""CallScribe Typer CLI (public commands + hidden ``_recorder`` / ``_transcribe``).
+
+Hidden subcommands are spawned as detached workers; users should not invoke them
+directly. Prefer ``uv run callscribe <cmd>`` or an installed console script.
+"""
 
 from __future__ import annotations
 
@@ -138,7 +142,7 @@ def stop_cmd() -> None:
 def toggle_cmd(
     title: str | None = typer.Option(None, "--title"),
 ) -> None:
-    """Start if idle, stop if recording (for Shortcuts / Raycast)."""
+    """Start if idle, stop if recording (wire this to Shortcuts / Raycast)."""
     if get_live_recorder():
         stop_cmd()
     else:
@@ -228,6 +232,7 @@ def transcribe_cmd(
         _err(f"Transcription already running (pid {live.pid}): {live.session_dir}")
         raise typer.Exit(1)
 
+    # CLI overrides are only passed in-process; detached worker reads config only.
     needs_fg = foreground or any(
         x is not None for x in (language, speakers, min_speakers, max_speakers)
     )

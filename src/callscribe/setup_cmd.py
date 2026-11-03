@@ -1,4 +1,9 @@
-"""Hardened one-time setup (network allowed)."""
+"""Hardened one-time setup (the only command allowed to use the network).
+
+Warms Whisper + pyannote into the Hugging Face Hub cache. Transcription later
+sets ``HF_HUB_OFFLINE`` and must not download. Errors include fix hints
+(ffmpeg, token, gated license).
+"""
 
 from __future__ import annotations
 

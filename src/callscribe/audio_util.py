@@ -1,4 +1,8 @@
-"""Small WAV helpers (silence detection, duration)."""
+"""Small WAV helpers (silence detection, duration).
+
+``silent`` uses a very low peak/RMS gate — suitable for “permission denied /
+digital zero” checks after recording, not for ASR energy filtering (see asr.py).
+"""
 
 from __future__ import annotations
 
@@ -42,6 +46,7 @@ def wav_info(path: Path) -> dict[str, float | int | bool]:
     peak = max(abs(s) for s in samples)
     mean_sq = sum(s * s for s in samples) / len(samples)
     rms = mean_sq**0.5
+    # Near-digital-zero only; real quiet speech usually exceeds this.
     silent = peak < 32 and rms < 1.0
     return {
         "duration_s": nframes / rate,

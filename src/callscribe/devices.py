@@ -17,7 +17,10 @@ class MicDevice:
 
 
 def classify_mic(name: str) -> MicClass:
-    """Heuristic mic class from an avfoundation device name (for doctor tips)."""
+    """Heuristic mic class from an avfoundation device name (doctor tips only).
+
+    Not used to change capture settings yet (see BACKLOG adaptive mic).
+    """
     n = name.lower()
     if "airpods" in n:
         return "airpods"
