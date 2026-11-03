@@ -17,9 +17,9 @@ class MicDevice:
 
 
 def classify_mic(name: str) -> MicClass:
-    """Heuristic mic class from an avfoundation device name (doctor tips only).
+    """Heuristic mic class from an avfoundation device name.
 
-    Not used to change capture settings yet (see BACKLOG adaptive mic).
+    Feeds adaptive profiles (sync tolerance / latency bias) via ``mic_profile``.
     """
     n = name.lower()
     if "airpods" in n:
@@ -131,4 +131,23 @@ def resolve_mic_device(spec: str) -> MicDevice:
         )
     raise RuntimeError(
         f"No microphone matching {spec!r}. Run `callscribe devices`."
+    )
+
+
+def resolve_mic_by_exact_name(name: str) -> MicDevice:
+    """Resolve by exact device name (case-insensitive). Used for mid-session re-probe."""
+    devices = list_microphones()
+    if not devices:
+        raise RuntimeError(
+            "No avfoundation audio input devices found. Is ffmpeg installed?"
+        )
+    lowered = name.strip().lower()
+    matches = [d for d in devices if d.name.lower() == lowered]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise RuntimeError(f"Ambiguous mic name {name!r}: {[d.name for d in matches]}")
+    raise RuntimeError(
+        f"Microphone {name!r} not found (disconnected?). "
+        "Reconnect AirPods/USB mic or run `callscribe devices`."
     )

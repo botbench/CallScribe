@@ -35,14 +35,25 @@ def mixdown(
     meta: SessionMeta,
     *,
     sample_rate: int = 16000,
-    duration_tolerance_s: float = 1.0,
+    duration_tolerance_s: float | None = None,
 ) -> Path:
-    """Create 16 kHz 16-bit stereo WAV: left=me, right=remote."""
+    """Create 16 kHz 16-bit stereo WAV: left=me, right=remote.
+
+    Duration slack comes from ``meta.mixdown_duration_tolerance_s`` (mic profile)
+    when ``duration_tolerance_s`` is not passed explicitly.
+    """
     ffmpeg = _require_ffmpeg()
     if not me_wav.exists():
         raise MixdownError(f"Missing mic track: {me_wav}")
     if not remote_wav.exists():
         raise MixdownError(f"Missing remote track: {remote_wav}")
+
+    if duration_tolerance_s is None:
+        duration_tolerance_s = (
+            float(meta.mixdown_duration_tolerance_s)
+            if meta.mixdown_duration_tolerance_s is not None
+            else 1.0
+        )
 
     me_info = wav_info(me_wav)
     remote_info = wav_info(remote_wav)

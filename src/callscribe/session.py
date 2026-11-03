@@ -37,6 +37,11 @@ class SessionMeta:
     capture: str = "system"
     mic_device: str = "default"
     mic_device_resolved: str | None = None
+    # Adaptive mic path (filled by recorder from device name + config).
+    mic_name: str | None = None
+    mic_class: str | None = None
+    me_latency_bias_ms: float | None = None
+    mixdown_duration_tolerance_s: float | None = None
     keep_raw_tracks: bool = True
     error: str | None = None
     tool_versions: dict[str, str] = field(default_factory=dict)
@@ -94,6 +99,9 @@ def start_delay_seconds(meta: SessionMeta) -> tuple[float, float]:
 
     The track that started later gets a positive delay so timelines align.
     Prefer monotonic clocks; fall back to UTC ISO timestamps.
+
+    ``me_latency_bias_ms`` (Bluetooth/AirPods path): assume mic content lags
+    remote by that amount → add to the remote delay (or reduce me delay).
     """
     if (
         meta.me_start_monotonic is not None
@@ -108,6 +116,18 @@ def start_delay_seconds(meta: SessionMeta) -> tuple[float, float]:
         delta = 0.0
 
     if delta >= 0:
-        # me started later → delay me
-        return delta * 1000.0, 0.0
-    return 0.0, (-delta) * 1000.0
+        me_ms, remote_ms = delta * 1000.0, 0.0
+    else:
+        me_ms, remote_ms = 0.0, (-delta) * 1000.0
+
+    bias = float(meta.me_latency_bias_ms or 0.0)
+    if bias > 0:
+        # Mic audio lags: prefer delaying remote; leftover bias delays me less.
+        absorb = min(me_ms, bias)
+        me_ms -= absorb
+        remote_ms += bias - absorb
+    elif bias < 0:
+        # Rare: mic leads — delay me.
+        me_ms += -bias
+
+    return me_ms, remote_ms

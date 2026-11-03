@@ -58,6 +58,9 @@ Created at `~/.callscribe/config.toml` on first run:
 output_dir        = "~/CallScribe"
 my_name           = "Me"
 mic_device        = "XS AirPods Pro 3"   # from `callscribe devices`; or "default"
+mic_class         = "auto"               # or airpods|bluetooth|builtin|usb
+# mic_latency_bias_ms          = 100     # optional; default from mic_class
+# mixdown_duration_tolerance_s = 2.0     # optional; looser for AirPods
 capture           = "system"             # or "app:Firefox"
 exclude_apps      = []
 language          = "auto"
@@ -110,7 +113,8 @@ Session folders are stamped at record time (`YYYY-MM-DD_HHMM[_title]`). Use `lis
 | Transcription fails offline | Re-run `setup` on the network so Hub cache has the models (`~/.cache/huggingface/hub`) |
 | Wrong language | `transcribe … --foreground --language en` (or set `language` in config) |
 | Session path errors | Use a real folder from `list`, not a `YYYY-MM-DD_HHMM` placeholder |
-| AirPods / Bluetooth sound thin | Expected on HFP/SCO; still supported — `doctor` prints the mic class tip |
+| AirPods / Bluetooth sound thin | Expected on HFP/SCO; `doctor` shows adaptive mic profile (tolerance + latency bias) |
+| Mic drops mid-call (AirPods) | Recorder re-probes by device name for a few seconds; reconnect or start a new session |
 
 Inspect logs under `~/.callscribe/logs/` and `meta.json` / `recorder.log` inside the session folder.
 

@@ -20,6 +20,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,12 +29,17 @@ import catap
 from callscribe import __version__
 from callscribe.audio_util import is_silent_wav, wav_info
 from callscribe.config import Config, load_config
-from callscribe.devices import resolve_mic_device
+from callscribe.devices import MicDevice, resolve_mic_by_exact_name, resolve_mic_device
 from callscribe.logging_util import log_exception, log_line
+from callscribe.mic_profile import profile_tip, resolve_mic_profile
 from callscribe.mixdown import MixdownError, mixdown
 from callscribe.notify import notify
 from callscribe.session import load_meta, save_meta
 from callscribe.state import clear_recorder_state
+
+# How long to wait for AirPods/USB to reappear after ffmpeg dies mid-call.
+_MIC_REPROBE_WAIT_S = 5.0
+_MIC_REPROBE_POLL_S = 0.5
 
 
 def host_app_hint() -> str:
@@ -154,6 +160,97 @@ def _start_mic(mic_index: int, me_path: Path) -> subprocess.Popen[str]:
     )
 
 
+def _stop_mic_gracefully(mic_proc: subprocess.Popen[str] | None) -> None:
+    if mic_proc is None or mic_proc.poll() is not None:
+        return
+    if mic_proc.stdin:
+        try:
+            mic_proc.stdin.write("q")
+            mic_proc.stdin.flush()
+        except BrokenPipeError:
+            pass
+    try:
+        mic_proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        mic_proc.terminate()
+        mic_proc.wait(timeout=5)
+
+
+def _concat_wavs(parts: list[Path], out: Path) -> None:
+    """Concatenate mono mic segments (AirPods reconnect) into ``me.wav``."""
+    if not parts:
+        raise RuntimeError("No microphone segments to concatenate")
+    if len(parts) == 1:
+        if parts[0].resolve() != out.resolve():
+            out.unlink(missing_ok=True)
+            parts[0].replace(out)
+        return
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg not found on PATH")
+    list_file = out.parent / "me_concat.txt"
+    list_file.write_text(
+        "".join(f"file '{p.resolve()}'\n" for p in parts),
+        encoding="utf-8",
+    )
+    staged = out.parent / "me_concat_out.wav"
+    proc = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_file),
+            "-c",
+            "copy",
+            str(staged),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    list_file.unlink(missing_ok=True)
+    if proc.returncode != 0 or not staged.exists():
+        raise RuntimeError(
+            "Failed to concatenate mic segments after reconnect:\n"
+            + (proc.stderr or "")[-800:]
+        )
+    out.unlink(missing_ok=True)
+    staged.replace(out)
+    for p in parts:
+        if p.resolve() != out.resolve():
+            p.unlink(missing_ok=True)
+
+
+def _reprobe_mic_by_name(
+    mic_name: str,
+    *,
+    wait_s: float = _MIC_REPROBE_WAIT_S,
+    should_abort: Callable[[], bool] | None = None,
+) -> MicDevice:
+    """Wait briefly for a disconnected mic (AirPods) to reappear under the same name."""
+    deadline = time.monotonic() + wait_s
+    last_err: Exception | None = None
+    while time.monotonic() < deadline:
+        if should_abort and should_abort():
+            raise RuntimeError(
+                f"Stop requested while waiting for microphone {mic_name!r} to reconnect."
+            )
+        try:
+            return resolve_mic_by_exact_name(mic_name)
+        except RuntimeError as e:
+            last_err = e
+            time.sleep(_MIC_REPROBE_POLL_S)
+    raise RuntimeError(
+        f"Microphone {mic_name!r} disappeared mid-recording and did not return "
+        f"within {wait_s:.0f}s. Reconnect AirPods/USB, then `callscribe start` again. "
+        f"({last_err})"
+    )
+
+
 def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
     """Foreground recorder loop for ``callscribe _recorder <session-dir>``."""
     cfg = cfg or load_config()
@@ -171,7 +268,13 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
     }
 
     mic = resolve_mic_device(cfg.mic_device)
+    profile = resolve_mic_profile(mic, cfg)
     meta.mic_device_resolved = f"{mic.index}:{mic.name}"
+    meta.mic_name = mic.name
+    meta.mic_class = profile.mic_class
+    meta.me_latency_bias_ms = profile.me_latency_bias_ms
+    meta.mixdown_duration_tolerance_s = profile.duration_tolerance_s
+    log_line("recorder", f"mic profile: {profile_tip(profile)}")
 
     stop_requested = False
 
@@ -185,6 +288,9 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
 
     remote_session = None
     mic_proc: subprocess.Popen[str] | None = None
+    # Segmented mic capture so AirPods can reconnect at a new avfoundation index.
+    me_parts: list[Path] = []
+    me_part_i = 1
 
     try:
         # Start both tracks as close together as possible; timestamps feed adelay.
@@ -194,7 +300,10 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
         meta.remote_start_utc = datetime.now(UTC).isoformat()
         meta.remote_start_monotonic = t_remote_mono
 
-        mic_proc = _start_mic(mic.index, me_path)
+        part = session_dir / f"me_{me_part_i:03d}.wav"
+        me_part_i += 1
+        me_parts.append(part)
+        mic_proc = _start_mic(mic.index, part)
         t_me_mono = time.monotonic()
         meta.me_start_utc = datetime.now(UTC).isoformat()
         meta.me_start_monotonic = t_me_mono
@@ -205,9 +314,36 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
             if mic_proc.poll() is not None:
                 err = ""
                 if mic_proc.stderr:
-                    err = mic_proc.stderr.read()[-500:]
-                raise RuntimeError(
-                    f"Microphone ffmpeg exited early (code {mic_proc.returncode}). {err}"
+                    err = (mic_proc.stderr.read() or "")[-500:]
+                log_line(
+                    "recorder",
+                    f"mic ffmpeg exited (code {mic_proc.returncode}); "
+                    f"re-probing {mic.name!r}. {err}",
+                    level="ERROR",
+                )
+                mic = _reprobe_mic_by_name(
+                    mic.name,
+                    should_abort=lambda: stop_requested,
+                )
+                # Class can change if the same name is unlikely; refresh profile lightly.
+                profile = resolve_mic_profile(mic, cfg)
+                meta.mic_device_resolved = f"{mic.index}:{mic.name}"
+                meta.mic_class = profile.mic_class
+                meta.me_latency_bias_ms = profile.me_latency_bias_ms
+                meta.mixdown_duration_tolerance_s = profile.duration_tolerance_s
+                save_meta(session_dir, meta)
+                part = session_dir / f"me_{me_part_i:03d}.wav"
+                me_part_i += 1
+                me_parts.append(part)
+                mic_proc = _start_mic(mic.index, part)
+                log_line(
+                    "recorder",
+                    f"mic reconnected at [{mic.index}] {mic.name} → {part.name}",
+                )
+                notify(
+                    "CallScribe",
+                    f"Mic reconnected: {mic.name}",
+                    enabled=cfg.notify,
                 )
             # Property (not a method) — True if the Core Audio tap failed mid-run.
             if remote_session.capture_failed:
@@ -217,18 +353,10 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
         remote_session.stop()
         silence_remote = bool(remote_session.captured_only_silence)
 
-        # Prefer ffmpeg interactive quit over SIGKILL so the WAV header is rewritten.
-        if mic_proc.poll() is None and mic_proc.stdin:
-            try:
-                mic_proc.stdin.write("q")
-                mic_proc.stdin.flush()
-            except BrokenPipeError:
-                pass
-            try:
-                mic_proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                mic_proc.terminate()
-                mic_proc.wait(timeout=5)
+        _stop_mic_gracefully(mic_proc)
+        mic_proc = None
+        _concat_wavs(me_parts, me_path)
+        me_parts = []
 
         meta.stopped_utc = datetime.now(UTC).isoformat()
         if me_path.exists():
@@ -254,7 +382,8 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
         if is_silent_wav(me_path):
             meta.status = "failed"
             meta.error = (
-                f"Microphone track is silent ({meta.mic_device_resolved}). "
+                f"Microphone track is silent ({meta.mic_device_resolved}, "
+                f"class={meta.mic_class}). "
                 f"Grant Microphone permission to {host}, check mute, and confirm "
                 f"the device with `callscribe devices` (AirPods / built-in)."
             )

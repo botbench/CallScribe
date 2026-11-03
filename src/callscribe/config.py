@@ -17,6 +17,11 @@ DEFAULT_TOML = """\
 output_dir        = "~/CallScribe"
 my_name           = "Me"
 mic_device        = "default"      # name from `callscribe devices`, or "default"
+# Mic path profile: "auto" (from device name) or force airpods|bluetooth|builtin|usb|unknown
+mic_class         = "auto"
+# Optional overrides (omit / leave commented to use class defaults):
+# mic_latency_bias_ms            = 100   # assume Me lags remote by N ms
+# mixdown_duration_tolerance_s   = 2.0   # call.wav duration check slack
 capture           = "system"       # "system" or "app:Firefox"
 exclude_apps      = []             # only used when capture = "system"
 language          = "auto"         # or "en", "fr", "nl", ...
@@ -35,6 +40,9 @@ class Config:
     output_dir: str = "~/CallScribe"
     my_name: str = "Me"
     mic_device: str = "default"
+    mic_class: str = "auto"
+    mic_latency_bias_ms: float | None = None
+    mixdown_duration_tolerance_s: float | None = None
     capture: str = "system"
     exclude_apps: list[str] = field(default_factory=list)
     language: str = "auto"
@@ -52,7 +60,15 @@ class Config:
         return expand(self.diarization_dir)
 
 
+def _optional_float(data: dict[str, Any], key: str) -> float | None:
+    if key not in data or data[key] is None:
+        return None
+    return float(data[key])
+
+
 def _validate(data: dict[str, Any]) -> Config:
+    from callscribe.mic_profile import VALID_MIC_CLASSES
+
     known = {f.name for f in Config.__dataclass_fields__.values()}  # type: ignore[attr-defined]
     extra = set(data) - known
     if extra:
@@ -66,10 +82,24 @@ def _validate(data: dict[str, Any]) -> Config:
     if not isinstance(exclude, list) or not all(isinstance(x, str) for x in exclude):
         raise ValueError("exclude_apps must be a list of strings")
 
+    mic_class = str(data.get("mic_class", "auto")).strip().lower() or "auto"
+    if mic_class not in VALID_MIC_CLASSES:
+        raise ValueError(
+            f"mic_class must be one of {sorted(VALID_MIC_CLASSES)}, got {mic_class!r}"
+        )
+
+    bias = _optional_float(data, "mic_latency_bias_ms")
+    tol = _optional_float(data, "mixdown_duration_tolerance_s")
+    if tol is not None and tol <= 0:
+        raise ValueError("mixdown_duration_tolerance_s must be > 0")
+
     cfg = Config(
         output_dir=str(data.get("output_dir", "~/CallScribe")),
         my_name=str(data.get("my_name", "Me")),
         mic_device=str(data.get("mic_device", "default")),
+        mic_class=mic_class,
+        mic_latency_bias_ms=bias,
+        mixdown_duration_tolerance_s=tol,
         capture=capture,
         exclude_apps=list(exclude),
         language=str(data.get("language", "auto")),
