@@ -34,7 +34,7 @@ uv sync
 uv run callscribe setup
 ```
 
-`setup` creates `~/.callscribe/`, writes default config, checks ffmpeg, and warms Whisper + pyannote into the **Hugging Face Hub cache** (network allowed here only). Transcription then runs with Hub offline flags. `diarization_dir` in config is an optional local snapshot override (only used if it contains `config.yaml`); otherwise Hub cache is canonical.
+`setup` creates `~/.callscribe/`, writes default config, checks ffmpeg, warms Whisper + pyannote into the **Hugging Face Hub cache** (network allowed here only), and installs the Cursor **personal** operator skill to `~/.cursor/skills/callscribe/`. Transcription then runs with Hub offline flags. `diarization_dir` in config is an optional local snapshot override (only used if it contains `config.yaml`); otherwise Hub cache is canonical.
 
 Optional PATH install: `uv tool install -e .` from this repo.
 
@@ -141,3 +141,44 @@ uv run ruff check src tests
 ```
 
 Slow tests need `ffmpeg`, macOS `say`, and a prior `callscribe setup` (Hub model cache). They are not a quality benchmark for synthetic TTS.
+
+### Cursor agent skill
+
+CallScribe ships an **operator skill**: short instructions so Cursor agents know how to run the CLI (record, transcribe, rename, debug permissions). It is not a second copy of the product.
+
+#### Install the skill
+
+**Project skill (this repo open in Cursor)** — already in the tree; nothing extra to install:
+
+- Path: [`.cursor/skills/callscribe/SKILL.md`](.cursor/skills/callscribe/SKILL.md)
+- Applies when you work in this checkout.
+
+**Personal skill (any Cursor chat / other projects)** — install or refresh with setup:
+
+```bash
+cd /path/to/CallScribe
+uv sync
+uv run callscribe setup
+```
+
+That copies the skill to `~/.cursor/skills/callscribe/`. Re-run `setup` after pulling skill updates.
+
+| Location | Scope |
+|---|---|
+| `.cursor/skills/callscribe/` in this repo | Project — when this checkout is open |
+| `~/.cursor/skills/callscribe/` | Personal — after `setup`, available everywhere |
+
+Canonical packaged source: `src/callscribe/operator_skill/SKILL.md` (kept in sync with the project skill path).
+
+#### Use the skill
+
+1. Finish normal CallScribe install (`uv sync`, HF token, `setup`, permissions) as above.
+2. In Cursor, ask in plain language, for example:
+   - “Run `callscribe doctor` and tell me if mic/system audio look OK”
+   - “Start a CallScribe recording titled standup”
+   - “List recent sessions and show the confidence line for the latest transcript”
+   - “Rename SPEAKER_00 to Alice in session …”
+3. You can also name it explicitly: “Using the CallScribe skill, …”
+4. The agent should drive `uv run callscribe …` (or a PATH-installed `callscribe`), use `list` for real session paths, and follow Terminal.app / WezTerm permission notes in the skill.
+
+This skill does not replace this README for human install steps.

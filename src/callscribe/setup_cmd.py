@@ -148,6 +148,24 @@ def run_setup(*, echo) -> None:
         f"Optional local diarization override dir: {dest} "
         "(unused unless it contains config.yaml)"
     )
+
+    # Personal Cursor skill so agents can operate CallScribe outside this repo.
+    try:
+        from callscribe.skill_install import install_personal_operator_skill
+
+        skill_dest = install_personal_operator_skill()
+        ok(
+            f"Cursor personal skill installed: {skill_dest} "
+            "(project skill also ships at .cursor/skills/callscribe/)"
+        )
+    except Exception as e:
+        log_exception("setup", "personal skill install failed", e)
+        ok(
+            f"Warning: could not install Cursor personal skill ({e}). "
+            "Project skill in .cursor/skills/callscribe still works when this "
+            "repo is open in Cursor."
+        )
+
     ok("Setup complete. Transcription can run offline after this.")
 
 
