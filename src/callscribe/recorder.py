@@ -40,6 +40,9 @@ from callscribe.state import clear_recorder_state
 # How long to wait for AirPods/USB to reappear after ffmpeg dies mid-call.
 _MIC_REPROBE_WAIT_S = 5.0
 _MIC_REPROBE_POLL_S = 0.5
+# If the mic WAV stops growing while ffmpeg is still alive, treat as hung (stderr
+# deadlock / Bluetooth stall) and rotate to a new segment.
+_MIC_STALL_S = 15.0
 
 
 def host_app_hint() -> str:
@@ -138,10 +141,24 @@ def _start_remote(cfg: Config, remote_path: Path):
     raise RuntimeError(f"Unsupported capture mode: {capture!r}")
 
 
-def _start_mic(mic_index: int, me_path: Path) -> subprocess.Popen[str]:
+def _start_mic(
+    mic_index: int,
+    me_path: Path,
+    *,
+    stderr_path: Path,
+) -> tuple[subprocess.Popen[str], object]:
+    """Start mic ffmpeg; stderr goes to a file (never PIPE — avoids deadlock).
+
+    Returns ``(proc, stderr_file)`` — caller must close ``stderr_file`` after stop.
+    True byte-append into one WAV is not viable across ffmpeg restarts (each run
+    writes a new RIFF header); we rotate ``me_NNN.wav`` segments and concat later.
+    """
     # avfoundation input is "video_index:audio_index"; empty video = mic only.
-    # stdin kept open so we can send "q" for a clean WAV header on stop.
-    return subprocess.Popen(
+    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    stderr_f = open(stderr_path, "a", encoding="utf-8")  # noqa: SIM115
+    stderr_f.write(f"\n--- mic start index={mic_index} → {me_path.name} ---\n")
+    stderr_f.flush()
+    proc = subprocess.Popen(
         [
             "ffmpeg",
             "-y",
@@ -155,64 +172,102 @@ def _start_mic(mic_index: int, me_path: Path) -> subprocess.Popen[str]:
         ],
         stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        stderr=stderr_f,
         text=True,
     )
+    return proc, stderr_f
 
 
 def _stop_mic_gracefully(mic_proc: subprocess.Popen[str] | None) -> None:
+    """Stop mic ffmpeg without raising (q → SIGTERM → SIGKILL)."""
     if mic_proc is None or mic_proc.poll() is not None:
         return
     if mic_proc.stdin:
         try:
             mic_proc.stdin.write("q")
             mic_proc.stdin.flush()
-        except BrokenPipeError:
+        except (BrokenPipeError, OSError):
             pass
     try:
         mic_proc.wait(timeout=10)
+        return
     except subprocess.TimeoutExpired:
-        mic_proc.terminate()
+        log_line("recorder", "mic ffmpeg ignored 'q'; sending SIGTERM", level="ERROR")
+        try:
+            mic_proc.terminate()
+        except OSError:
+            pass
+    try:
         mic_proc.wait(timeout=5)
+        return
+    except subprocess.TimeoutExpired:
+        log_line("recorder", "mic ffmpeg ignored SIGTERM; sending SIGKILL", level="ERROR")
+        try:
+            mic_proc.kill()
+        except OSError:
+            pass
+    try:
+        mic_proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        log_line("recorder", "mic ffmpeg still alive after SIGKILL", level="ERROR")
 
 
-def _concat_wavs(parts: list[Path], out: Path) -> None:
-    """Concatenate mono mic segments (AirPods reconnect) into ``me.wav``."""
+def _usable_mic_parts(parts: list[Path]) -> list[Path]:
+    """Keep segment files that look like real WAVs (more than an empty header)."""
+    usable: list[Path] = []
+    for p in parts:
+        try:
+            if p.exists() and p.stat().st_size > 44:
+                usable.append(p)
+        except OSError:
+            continue
+    return usable
+
+
+def _concat_wavs(parts: list[Path], out: Path, *, sample_rate: int = 48000) -> None:
+    """Concatenate mic segments into ``me.wav`` (resample so AirPods rate changes OK)."""
+    parts = _usable_mic_parts(parts)
     if not parts:
         raise RuntimeError("No microphone segments to concatenate")
     if len(parts) == 1:
-        if parts[0].resolve() != out.resolve():
-            out.unlink(missing_ok=True)
-            parts[0].replace(out)
+        src = parts[0]
+        if src.resolve() == out.resolve():
+            return
+        out.unlink(missing_ok=True)
+        try:
+            src.replace(out)
+        except OSError:
+            shutil.copy2(src, out)
+            src.unlink(missing_ok=True)
         return
+
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg not found on PATH")
-    list_file = out.parent / "me_concat.txt"
-    list_file.write_text(
-        "".join(f"file '{p.resolve()}'\n" for p in parts),
-        encoding="utf-8",
+
+    # filter_complex concat with aformat — handles mixed 24/48 kHz AirPods segments.
+    cmd: list[str] = [ffmpeg, "-y"]
+    for p in parts:
+        cmd.extend(["-i", str(p)])
+    labels = "".join(
+        f"[{i}:a]aformat=sample_rates={sample_rate}:channel_layouts=mono[a{i}];"
+        for i in range(len(parts))
     )
+    merge = "".join(f"[a{i}]" for i in range(len(parts)))
+    filt = f"{labels}{merge}concat=n={len(parts)}:v=0:a=1[out]"
     staged = out.parent / "me_concat_out.wav"
-    proc = subprocess.run(
+    cmd.extend(
         [
-            ffmpeg,
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(list_file),
-            "-c",
-            "copy",
+            "-filter_complex",
+            filt,
+            "-map",
+            "[out]",
+            "-acodec",
+            "pcm_s16le",
             str(staged),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+        ]
     )
-    list_file.unlink(missing_ok=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if proc.returncode != 0 or not staged.exists():
         raise RuntimeError(
             "Failed to concatenate mic segments after reconnect:\n"
@@ -288,85 +343,57 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
 
     remote_session = None
     mic_proc: subprocess.Popen[str] | None = None
-    # Segmented mic capture so AirPods can reconnect at a new avfoundation index.
+    mic_stderr_f: object | None = None
+    # Segmented mic capture: each ffmpeg restart → new me_NNN.wav, concat on stop.
     me_parts: list[Path] = []
     me_part_i = 1
+    mic_log = session_dir / "mic_ffmpeg.log"
+    last_mic_size = 0
+    last_mic_growth_at = time.monotonic()
 
-    try:
-        # Start both tracks as close together as possible; timestamps feed adelay.
-        remote_session = _start_remote(cfg, remote_path)
-        t_remote_mono = time.monotonic()
-        remote_session.start()
-        meta.remote_start_utc = datetime.now(UTC).isoformat()
-        meta.remote_start_monotonic = t_remote_mono
+    def _close_mic_stderr() -> None:
+        nonlocal mic_stderr_f
+        if mic_stderr_f is not None:
+            try:
+                mic_stderr_f.close()  # type: ignore[union-attr]
+            except OSError:
+                pass
+            mic_stderr_f = None
 
+    def _begin_mic_segment(*, reason: str) -> None:
+        """Resolve mic (by name) and start a new me_NNN.wav segment."""
+        nonlocal mic, profile, mic_proc, mic_stderr_f, me_part_i
+        nonlocal last_mic_size, last_mic_growth_at
+        _stop_mic_gracefully(mic_proc)
+        mic_proc = None
+        _close_mic_stderr()
+        mic = _reprobe_mic_by_name(
+            meta.mic_name or mic.name,
+            should_abort=lambda: stop_requested,
+        )
+        profile = resolve_mic_profile(mic, cfg)
+        meta.mic_device_resolved = f"{mic.index}:{mic.name}"
+        meta.mic_name = mic.name
+        meta.mic_class = profile.mic_class
+        meta.me_latency_bias_ms = profile.me_latency_bias_ms
+        meta.mixdown_duration_tolerance_s = profile.duration_tolerance_s
+        save_meta(session_dir, meta)
         part = session_dir / f"me_{me_part_i:03d}.wav"
         me_part_i += 1
         me_parts.append(part)
-        mic_proc = _start_mic(mic.index, part)
-        t_me_mono = time.monotonic()
-        meta.me_start_utc = datetime.now(UTC).isoformat()
-        meta.me_start_monotonic = t_me_mono
-        meta.status = "recording"
-        save_meta(session_dir, meta)
+        mic_proc, mic_stderr_f = _start_mic(mic.index, part, stderr_path=mic_log)
+        last_mic_size = 0
+        last_mic_growth_at = time.monotonic()
+        log_line(
+            "recorder",
+            f"mic segment ({reason}) [{mic.index}] {mic.name} → {part.name}",
+        )
+        notify("CallScribe", f"Mic segment: {mic.name} ({reason})", enabled=cfg.notify)
 
-        while not stop_requested:
-            if mic_proc.poll() is not None:
-                err = ""
-                if mic_proc.stderr:
-                    err = (mic_proc.stderr.read() or "")[-500:]
-                log_line(
-                    "recorder",
-                    f"mic ffmpeg exited (code {mic_proc.returncode}); "
-                    f"re-probing {mic.name!r}. {err}",
-                    level="ERROR",
-                )
-                mic = _reprobe_mic_by_name(
-                    mic.name,
-                    should_abort=lambda: stop_requested,
-                )
-                # Class can change if the same name is unlikely; refresh profile lightly.
-                profile = resolve_mic_profile(mic, cfg)
-                meta.mic_device_resolved = f"{mic.index}:{mic.name}"
-                meta.mic_class = profile.mic_class
-                meta.me_latency_bias_ms = profile.me_latency_bias_ms
-                meta.mixdown_duration_tolerance_s = profile.duration_tolerance_s
-                save_meta(session_dir, meta)
-                part = session_dir / f"me_{me_part_i:03d}.wav"
-                me_part_i += 1
-                me_parts.append(part)
-                mic_proc = _start_mic(mic.index, part)
-                log_line(
-                    "recorder",
-                    f"mic reconnected at [{mic.index}] {mic.name} → {part.name}",
-                )
-                notify(
-                    "CallScribe",
-                    f"Mic reconnected: {mic.name}",
-                    enabled=cfg.notify,
-                )
-            # Property (not a method) — True if the Core Audio tap failed mid-run.
-            if remote_session.capture_failed:
-                raise RuntimeError("System/app audio capture failed (catap).")
-            time.sleep(0.2)
-
-        remote_session.stop()
-        silence_remote = bool(remote_session.captured_only_silence)
-
-        _stop_mic_gracefully(mic_proc)
-        mic_proc = None
-        _concat_wavs(me_parts, me_path)
-        me_parts = []
-
-        meta.stopped_utc = datetime.now(UTC).isoformat()
-        if me_path.exists():
-            meta.me_duration_s = float(wav_info(me_path)["duration_s"])
-        if remote_path.exists():
-            meta.remote_duration_s = float(wav_info(remote_path)["duration_s"])
-            if not silence_remote:
-                silence_remote = is_silent_wav(remote_path)
-
-        if silence_remote or is_silent_wav(remote_path):
+    def _finish_recorded(*, remote_looks_silent: bool) -> int:
+        """Mixdown + optional auto-transcribe after me.wav / remote.wav exist."""
+        nonlocal meta
+        if remote_looks_silent or is_silent_wav(remote_path):
             meta.status = "failed"
             meta.error = (
                 f"System/app audio recording looks silent. Grant "
@@ -433,21 +460,119 @@ def run_recorder(session_dir: Path, cfg: Config | None = None) -> int:
                     enabled=cfg.notify,
                 )
             except RuntimeError as e:
-                # e.g. another transcription already running
                 notify("CallScribe", str(e), enabled=cfg.notify)
         return 0
 
+    try:
+        # Start both tracks as close together as possible; timestamps feed adelay.
+        remote_session = _start_remote(cfg, remote_path)
+        t_remote_mono = time.monotonic()
+        remote_session.start()
+        meta.remote_start_utc = datetime.now(UTC).isoformat()
+        meta.remote_start_monotonic = t_remote_mono
+
+        part = session_dir / f"me_{me_part_i:03d}.wav"
+        me_part_i += 1
+        me_parts.append(part)
+        mic_proc, mic_stderr_f = _start_mic(mic.index, part, stderr_path=mic_log)
+        t_me_mono = time.monotonic()
+        meta.me_start_utc = datetime.now(UTC).isoformat()
+        meta.me_start_monotonic = t_me_mono
+        meta.status = "recording"
+        save_meta(session_dir, meta)
+        last_mic_growth_at = time.monotonic()
+
+        while not stop_requested:
+            if mic_proc is not None and mic_proc.poll() is not None:
+                log_line(
+                    "recorder",
+                    f"mic ffmpeg exited (code {mic_proc.returncode}); rotating segment",
+                    level="ERROR",
+                )
+                if stop_requested:
+                    break
+                _begin_mic_segment(reason="exit")
+            elif mic_proc is not None and me_parts:
+                # Stall detection: process alive but WAV not growing.
+                try:
+                    size = me_parts[-1].stat().st_size if me_parts[-1].exists() else 0
+                except OSError:
+                    size = 0
+                now = time.monotonic()
+                if size > last_mic_size:
+                    last_mic_size = size
+                    last_mic_growth_at = now
+                elif now - last_mic_growth_at >= _MIC_STALL_S and size > 44:
+                    log_line(
+                        "recorder",
+                        f"mic ffmpeg stalled ({_MIC_STALL_S:.0f}s no growth); "
+                        "killing and rotating segment",
+                        level="ERROR",
+                    )
+                    if stop_requested:
+                        break
+                    _begin_mic_segment(reason="stall")
+            # Property (not a method) — True if the Core Audio tap failed mid-run.
+            if remote_session.capture_failed:
+                raise RuntimeError("System/app audio capture failed (catap).")
+            time.sleep(0.2)
+
+        remote_session.stop()
+        silence_remote = bool(remote_session.captured_only_silence)
+
+        _stop_mic_gracefully(mic_proc)
+        mic_proc = None
+        _close_mic_stderr()
+        _concat_wavs(me_parts, me_path)
+        me_parts = []
+
+        meta.stopped_utc = datetime.now(UTC).isoformat()
+        if me_path.exists():
+            meta.me_duration_s = float(wav_info(me_path)["duration_s"])
+        if remote_path.exists():
+            meta.remote_duration_s = float(wav_info(remote_path)["duration_s"])
+            if not silence_remote:
+                silence_remote = is_silent_wav(remote_path)
+
+        return _finish_recorded(remote_looks_silent=silence_remote)
+
     except Exception as e:
+        log_exception("recorder", f"failed {session_dir.name}", e)
+        # Best-effort salvage: finalize whatever mic/remote audio we already have.
+        try:
+            _stop_mic_gracefully(mic_proc)
+            mic_proc = None
+            _close_mic_stderr()
+            if remote_session is not None:
+                try:
+                    if remote_session.is_recording or remote_session.needs_cleanup:
+                        remote_session.stop()
+                except Exception:
+                    pass
+            usable = _usable_mic_parts(me_parts)
+            if usable:
+                _concat_wavs(usable, me_path)
+            meta.stopped_utc = datetime.now(UTC).isoformat()
+            if me_path.exists():
+                meta.me_duration_s = float(wav_info(me_path)["duration_s"])
+            if remote_path.exists():
+                meta.remote_duration_s = float(wav_info(remote_path)["duration_s"])
+            remote_silent = bool(remote_path.exists() and is_silent_wav(remote_path))
+            if me_path.exists() and remote_path.exists() and not remote_silent:
+                log_line("recorder", "salvaging session after recorder error")
+                return _finish_recorded(remote_looks_silent=False)
+        except Exception as salvage_e:
+            log_exception("recorder", "salvage failed", salvage_e)
+
         meta.status = "failed"
         meta.error = str(e)
         meta.stopped_utc = datetime.now(UTC).isoformat()
         save_meta(session_dir, meta)
-        log_exception("recorder", f"failed {session_dir.name}", e)
         notify("CallScribe", f"Recording failed: {e}", enabled=cfg.notify)
         return 1
     finally:
-        if mic_proc is not None and mic_proc.poll() is None:
-            mic_proc.kill()
+        _stop_mic_gracefully(mic_proc)
+        _close_mic_stderr()
         if remote_session is not None:
             try:
                 if remote_session.is_recording or remote_session.needs_cleanup:

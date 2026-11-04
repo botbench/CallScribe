@@ -116,7 +116,8 @@ Each transcript includes an **ASR confidence** sanity check (`high` / `medium` /
 | Wrong language | `transcribe … --foreground --language en` (or set `language` in config) |
 | Session path errors | Use a real folder from `list`, not a `YYYY-MM-DD_HHMM` placeholder |
 | AirPods / Bluetooth sound thin | Expected on HFP/SCO; `doctor` shows adaptive mic profile (tolerance + latency bias) |
-| Mic drops mid-call (AirPods) | Recorder re-probes by device name for a few seconds; reconnect or start a new session |
+| Mic drops mid-call (AirPods) | Recorder re-probes by name, or rotates a new `me_NNN.wav` segment if ffmpeg stalls; segments are concatenated on stop |
+| Stop hangs / no transcript after a long call | Mic ffmpeg is stopped with q→TERM→KILL; stderr goes to `mic_ffmpeg.log` (no pipe deadlock). If stop still errors, recorder tries to salvage mixdown from existing tracks |
 
 Inspect logs under `~/.callscribe/logs/` and `meta.json` / `recorder.log` inside the session folder.
 
