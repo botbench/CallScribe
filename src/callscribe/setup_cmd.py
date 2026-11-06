@@ -149,20 +149,20 @@ def run_setup(*, echo) -> None:
         "(unused unless it contains config.yaml)"
     )
 
-    # Personal Cursor skill so agents can operate CallScribe outside this repo.
+    # Personal Cursor skills so agents can operate CallScribe outside this repo.
     try:
-        from callscribe.skill_install import install_personal_operator_skill
+        from callscribe.skill_install import install_personal_skills
 
-        skill_dest = install_personal_operator_skill()
-        ok(
-            f"Cursor personal skill installed: {skill_dest} "
-            "(project skill also ships at .cursor/skills/callscribe/)"
-        )
+        for skill_dest in install_personal_skills():
+            ok(
+                f"Cursor personal skill installed: {skill_dest} "
+                "(project skills also ship under .cursor/skills/)"
+            )
     except Exception as e:
         log_exception("setup", "personal skill install failed", e)
         ok(
-            f"Warning: could not install Cursor personal skill ({e}). "
-            "Project skill in .cursor/skills/callscribe still works when this "
+            f"Warning: could not install Cursor personal skills ({e}). "
+            "Project skills under .cursor/skills/ still work when this "
             "repo is open in Cursor."
         )
 

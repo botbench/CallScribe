@@ -2,9 +2,24 @@
 
 Local macOS tool: record a call (system/app audio + microphone) to one stereo WAV, then produce a speaker-labeled transcript with Whisper + pyannote — all on-device after `setup`.
 
+Built with [Cursor](https://cursor.com).
+
 **Stereo layout:** left = you (mic), right = remote (system/app).
 
 See [`callscribe-plan.md`](callscribe-plan.md), [`callscribe-plan-clarifications.md`](callscribe-plan-clarifications.md), and [`SPIKES.md`](SPIKES.md).
+
+## Models & tools
+
+| Piece | What CallScribe uses it for |
+|---|---|
+| [catap](https://pypi.org/project/catap/) | System / app audio capture (Core Audio tap) |
+| [ffmpeg](https://ffmpeg.org/) (Homebrew) | Mic capture, mixdown, segment concat |
+| [mlx-whisper](https://pypi.org/project/mlx-whisper/) | On-device speech-to-text on Apple Silicon |
+| [mlx-community/whisper-large-v3-turbo](https://huggingface.co/mlx-community/whisper-large-v3-turbo) | Default ASR model (override with `whisper_model` in config) |
+| [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) | Remote-channel speaker diarization |
+| Apple Foundation Models (`fm --model system`) | Optional privacy-first call summaries (see Cursor summarize skill below) |
+
+**Languages:** CallScribe does not maintain a separate language list. Default `language = "auto"` lets Whisper detect the language; you can pin a code (`en`, `nl`, `es`, …) in config or via `transcribe --language`. Supported languages are those of the Whisper model in use — see [mlx-community/whisper-large-v3-turbo](https://huggingface.co/mlx-community/whisper-large-v3-turbo) and OpenAI Whisper’s [available languages](https://github.com/openai/whisper#available-models-and-languages) for the complete list.
 
 ## Requirements
 
@@ -34,7 +49,7 @@ uv sync
 uv run callscribe setup
 ```
 
-`setup` creates `~/.callscribe/`, writes default config, checks ffmpeg, warms Whisper + pyannote into the **Hugging Face Hub cache** (network allowed here only), and installs the Cursor **personal** operator skill to `~/.cursor/skills/callscribe/`. Transcription then runs with Hub offline flags. `diarization_dir` in config is an optional local snapshot override (only used if it contains `config.yaml`); otherwise Hub cache is canonical.
+`setup` creates `~/.callscribe/`, writes default config, checks ffmpeg, warms Whisper + pyannote into the **Hugging Face Hub cache** (network allowed here only), and installs Cursor **personal** skills to `~/.cursor/skills/callscribe/` and `~/.cursor/skills/callscribe-summarize/`. Transcription then runs with Hub offline flags. `diarization_dir` in config is an optional local snapshot override (only used if it contains `config.yaml`); otherwise Hub cache is canonical.
 
 Optional PATH install: `uv tool install -e .` from this repo.
 
@@ -143,18 +158,25 @@ uv run ruff check src tests
 
 Slow tests need `ffmpeg`, macOS `say`, and a prior `callscribe setup` (Hub model cache). They are not a quality benchmark for synthetic TTS.
 
-### Cursor agent skill
+### Cursor agent skills
 
-CallScribe ships an **operator skill**: short instructions so Cursor agents know how to run the CLI (record, transcribe, rename, debug permissions). It is not a second copy of the product.
+CallScribe ships two Cursor skills (not a second copy of the product):
 
-#### Install the skill
+| Skill | Purpose |
+|---|---|
+| **callscribe** | Operate the CLI (record, transcribe, rename, doctor, permissions) |
+| **callscribe-summarize** | Privacy-first meeting summary + action items from `transcript.md` |
 
-**Project skill (this repo open in Cursor)** — already in the tree; nothing extra to install:
+Summarization stays a **separate layer**: it reads an existing transcript and writes `summary.md` / `actions.md` under the session dir. Default backend is Apple’s **on-device** Foundation Model via `/usr/bin/fm --model system` (not Private Cloud Compute, not third-party cloud APIs). See the summarize skill for details and local fallbacks.
 
-- Path: [`.cursor/skills/callscribe/SKILL.md`](.cursor/skills/callscribe/SKILL.md)
-- Applies when you work in this checkout.
+#### Install the skills
 
-**Personal skill (any Cursor chat / other projects)** — install or refresh with setup:
+**Project skills (this repo open in Cursor)** — already in the tree:
+
+- [`.cursor/skills/callscribe/SKILL.md`](.cursor/skills/callscribe/SKILL.md)
+- [`.cursor/skills/callscribe-summarize/SKILL.md`](.cursor/skills/callscribe-summarize/SKILL.md)
+
+**Personal skills (any Cursor chat / other projects)** — install or refresh with setup:
 
 ```bash
 cd /path/to/CallScribe
@@ -162,24 +184,26 @@ uv sync
 uv run callscribe setup
 ```
 
-That copies the skill to `~/.cursor/skills/callscribe/`. Re-run `setup` after pulling skill updates.
+That copies both skills to `~/.cursor/skills/`. Re-run `setup` after pulling skill updates.
 
 | Location | Scope |
 |---|---|
-| `.cursor/skills/callscribe/` in this repo | Project — when this checkout is open |
-| `~/.cursor/skills/callscribe/` | Personal — after `setup`, available everywhere |
+| `.cursor/skills/callscribe/` / `callscribe-summarize/` | Project — when this checkout is open |
+| `~/.cursor/skills/callscribe/` / `callscribe-summarize/` | Personal — after `setup`, available everywhere |
 
-Canonical packaged source: `src/callscribe/operator_skill/SKILL.md` (kept in sync with the project skill path).
+Canonical packaged sources: `src/callscribe/operator_skill/SKILL.md` and `src/callscribe/summarize_skill/SKILL.md` (kept in sync with the project skill paths).
 
-#### Use the skill
+#### Use the skills
 
 1. Finish normal CallScribe install (`uv sync`, HF token, `setup`, permissions) as above.
-2. In Cursor, ask in plain language, for example:
+2. For **summarize**, also accept Apple’s Foundation Models CLI terms once (machine-wide): `sudo fm license`, then `fm models`.
+3. In Cursor, ask in plain language, for example:
    - “Run `callscribe doctor` and tell me if mic/system audio look OK”
    - “Start a CallScribe recording titled standup”
    - “List recent sessions and show the confidence line for the latest transcript”
    - “Rename SPEAKER_00 to Alice in session …”
-3. You can also name it explicitly: “Using the CallScribe skill, …”
-4. The agent should drive `uv run callscribe …` (or a PATH-installed `callscribe`), use `list` for real session paths, and follow Terminal.app / WezTerm permission notes in the skill.
+   - “Summarize my last CallScribe session into summary.md and actions.md (on-device only)”
+4. You can also name a skill explicitly: “Using the CallScribe summarize skill, …”
+5. The operator skill should drive `uv run callscribe …` (or a PATH-installed `callscribe`), use `list` for real session paths, and follow Terminal.app / WezTerm permission notes. The summarize skill should shell out to `fm --model system` (or another **local** backend) rather than uploading the transcript to a cloud LLM.
 
-This skill does not replace this README for human install steps.
+These skills do not replace this README for human install steps.

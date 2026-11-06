@@ -34,4 +34,19 @@ Ideas and follow-ups that are in scope later, but not required to finish the cur
 
 ---
 
+## Privacy-first call summaries (Cursor skill)
+
+**Status:** done (skill + Apple on-device path documented; 2026-11-04)  
+**Added:** 2026-11-04  
+
+**Shipped:**
+- Cursor skill `callscribe-summarize` (project + packaged + `setup` personal install)
+- Default backend: Apple Foundation Models CLI `/usr/bin/fm --model system` (on-device)
+- Hard rules: no silent cloud fallthrough; avoid pasting full transcripts into Cursor chat
+- Outputs: `summary.md` + `actions.md` beside the session transcript
+
+**Still optional later:** thin `callscribe summarize` CLI wrapper around `fm`; auto-chunk map-reduce for long calls; optional Notion export as an explicit share step.
+
+---
+
 ## (empty — add more items below)
